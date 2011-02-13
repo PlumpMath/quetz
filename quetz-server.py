@@ -26,15 +26,15 @@ PORT = 44454
 TIMEOUT_TIME = 1
 
 class PlayerInWorld(object):
-	def __init__(self, x, y, z, h, tailLength, addr):
-		self.x = x
-		self.y = y
-		self.z = z
-		self.h = h
-		
-		self.tailLength = tailLength
+	def __init__(self, addr, nickname):
+		self.x = 0
+		self.y = 0
+		self.z = 0
+		self.h = 0
+		self.tailLength = 0
 		
 		self.addr = addr
+		self.nickname = nickname
 
 class World(object):
 	"""
@@ -42,31 +42,6 @@ class World(object):
 	"""
 	def __init__(self):
 		self.players = []
-	
-	def updatePlayer(self, x, y, z, h, tailLength, addr):
-		playerFound = False
-		for player in self.players:
-			if player.addr == addr:
-				player.x = x
-				player.y = y
-				player.z = z
-				player.h = h
-				
-				player.tailLength = tailLength
-				
-				playerFound = True
-				break
-		
-		if not playerFound:
-			#add player
-			self.players.append(PlayerInWorld(x, y, z, h, tailLength, addr))
-			print "PLAYER " + str(addr) + " ADDED"
-	
-	def removePlayer(self, addr):
-		for player in self.players:
-			if player.addr == addr:
-				self.players.remove(player)
-				print "PLAYER " + str(addr) + " KICKED"
 	
 	def getPlayersNotSelf(self, addr):
 		playersNotSelf = []
@@ -80,10 +55,12 @@ class World(object):
 
 
 class ClientConnection(object):
-	def __init__(self, socket, addr, world):
+	def __init__(self, udphandler, socket, addr, world):
 		self.socket = socket
 		self.addr = addr
 		self.world = world
+		
+		self.udphandler = udphandler
 		
 		self.lastrequest = time.time()
 		
@@ -91,15 +68,45 @@ class ClientConnection(object):
 	
 	def addData(self, data):
 		self.lastrequest = time.time()
+		
 		if data == "REQ WORLD":
 			# Send the players
 			self.socket.sendto("PLAYERS " + zlib.compress(json.dumps(self.world.getPlayersNotSelf(self.addr))), self.addr)
 		elif data[0:11] == "SEND PLAYER":
 			try:
 				position = json.loads(zlib.decompress(data[12:]))
-				self.world.updatePlayer(position[0], position[1], position[2], position[3], position[4], self.addr)
+				self.updatePlayer(position[0], position[1], position[2], position[3], position[4])
 			except ValueError:
 				pass
+		elif data[0:2] == "HS":
+			# Handshake
+			print "HANDSHAKE"
+			# Send all the other players to this player
+			for player in self.world.players:
+				self.socket.sendto("PLAYER " + zlib.compress(json.dumps([player.addr, player.nickname])), self.addr)
+			
+			# Add this player to the world
+			self.addPlayer(data[3:])
+		elif data[0:3] == "MSG":
+			self.udphandler.multicast("MSG " + zlib.compress(json.dumps([zlib.decompress(data[4:]), self.player.nickname])))
+	
+	def updatePlayer(self, x, y, z, h, tailLength):
+		self.player.x = x
+		self.player.y = y
+		self.player.z = z
+		self.player.h = h
+		
+		self.player.tailLength = tailLength
+	
+	def addPlayer(self, nickname):
+		self.player = PlayerInWorld(self.addr, nickname)
+		self.world.players.append(self.player)
+		self.udphandler.multicast("PLAYER " + zlib.compress(json.dumps([self.addr, nickname])), self.addr)
+		print "PLAYER " + nickname + " ADDED"
+	
+	def removePlayer(self):
+		self.world.players.remove(self.player)
+		print "PLAYER " + self.player.nickname + " KICKED"
 	
 	def checkTimeout(self):
 		while True:
@@ -109,7 +116,8 @@ class ClientConnection(object):
 				break
 	
 	def remove(self):
-		self.world.removePlayer(self.addr)
+		self.removePlayer()
+		self.udphandler.connectedClients.remove(self)
 
 
 class UDPHandler(object):
@@ -128,7 +136,7 @@ class UDPHandler(object):
 			client.addData(data)
 	
 	def addClient(self, addr):
-		client = ClientConnection(self.socket, addr, self.world)
+		client = ClientConnection(self, self.socket, addr, self.world)
 		self.connectedClients.append(client)
 		return client
 	
@@ -138,9 +146,17 @@ class UDPHandler(object):
 				client.remove()
 				self.connectedClients.remove(client)
 				break
+	
+	def multicast(self, msg, addr=None):
+		for client in self.connectedClients:
+			if addr == None or client.addr <> addr:
+				client.socket.sendto(msg, client.addr)
 
 class QuetzServer():
 	def __init__(self, port):
+		global base
+		base = self
+		
 		print "QUETZ SERVER v 0.01 STARTED"
 		
 		# Setup the world as it looks like on this server
@@ -157,6 +173,7 @@ class QuetzServer():
 		while True:
 			try:
 				data, addr = self.socket.recvfrom(1024)
+				
 				self.udphandler.handle(data, addr)
 			except socket.error:
 				# something went wrong, but we have to keep on going for all other clients

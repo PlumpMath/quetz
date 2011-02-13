@@ -51,6 +51,56 @@ UPDATE_INTERVAL = 0.15
 
 # UI
 class OST(object):
+	def __init__(self):
+		# Chattext
+		self.chatText = TextNode("chatText")
+		self.chatText.setWordwrap(45.0)
+		self.chats = []
+		self.chatText.setText("")
+		self.chatText.setCardColor(0.2, 0.2, 0.2, 0.2)
+		self.chatText.setCardAsMargin(0.4, 0.4, 0.2, 0.2)
+		self.chatText.setCardDecal(True)
+		
+		textNodePath = aspect2d.attachNewNode(self.chatText)
+		textNodePath.setPos(-1.25, 0, -0.45)
+		textNodePath.setScale(0.05)
+		
+		# Enterchat
+		self.enterChat = DirectEntry(text = "", scale=.05, command=self.sendChat, focus=0, pos=(-1.25, 0, -0.95))
+		
+		# Task for mouse
+		#base.taskMgr.add(self.mouseWatcher, "mouseWatcher", sort=5)
+	
+	def sendChat(self, textEntered):
+		self.enterChat.enterText("")
+		base.serverConnection.sendChat(textEntered)
+	
+	def mouseWatcher(self, task):
+		if base.mouseWatcherNode.hasMouse():
+			if base.mouseWatcherNode.getMouseY() < -0.3:
+				self.chatText.setCardColor(0.2, 0.2, 0.2, 0.9)
+			else:
+				self.chatText.setCardColor(0.2, 0.2, 0.2, 0.2)
+		return Task.cont
+	
+	def addChat(self, msg, name=None):
+		# Add this message to the chats
+		if name == None:
+			self.chats.append("\n" + msg)
+		else:
+			self.chats.append("\n" + name + ": " + msg)
+		
+		# Delete old chats
+		if len(self.chats) > 10:
+			del self.chats[0]
+		
+		# Place the chats into the text
+		text = ""
+		for chat in self.chats:
+			text += chat
+		
+		self.chatText.setText(text)
+		
 	# Controls onscreen text	
 	def showMessage(self, msg, secs):
 		try:
@@ -402,6 +452,7 @@ class Tail(object):
 		return Task.cont
 	
 	def remove(self):
+		base.taskMgr.remove(str(self.taskId))
 		for tailObj in self.tailObjects:
 			tailObj.remove()
 
@@ -457,22 +508,47 @@ class OtherPlayer(NodePath):
 	"""
 	Another player in the world (either AI or networking)
 	"""
-	def __init__(self, addr=None):
+	def __init__(self, addr=None, nickname=None):
 		np = loader.loadModel("models/panda-model")
 		node = np.node()
 		NodePath.__init__(self, node)
 		
 		self.addr = addr
-		print "NEW PLAYER! " + str(self.addr)
+		self.nickname = nickname
+		self.id = uuid.uuid1()
 		
+		print "NEW PLAYER! " + str(self.nickname)
+		
+		# Create the smooth mover
 		self.smoothMover = SmoothMover()
 		self.smoothMover.setPredictionMode(1)
 		self.smoothMover.setSmoothMode(1)
 		
+		# Create the nickname label
+		text = TextNode("nicknameLabel")
+		text.setText(self.nickname)
+		text.setTextColor(1, 0, 0, 1)
+		self.nicknameLabel = NodePath(text)
+		self.nicknameLabel.reparentTo(base.render)
+		
 		# Tail
 		self.tail = Tail(self)
+		
+		# Tasks
+		base.taskMgr.add(self.moveNickLabel, str(self.id) + "-moveNickLabel")
+	
+	def moveNickLabel(self, task):
+		try:
+			self.nicknameLabel.setPos(self.getX(), self.getY(), 3)
+			self.nicknameLabel.setHpr(base.camera, 0, 0, 0)
+		except AssertionError:
+			# Player gone but task still running?
+			self.remove()
+			return Task.done
+		return Task.cont
 	
 	def remove(self):
+		base.taskMgr.remove(str(self.id) + "-moveNickLabel")
 		self.tail.remove()
 		self.removeNode()
 # END PLAYER OBJECTS
@@ -497,6 +573,11 @@ class ServerConnection():
 		self.server = server
 		#threading.Thread.__init__(self)
 		
+		# Handshake
+		print "send hs"
+		self.socket.sendto("HS " + base.playerActor.nickname, (self.server, self.port))
+		print "endsend hs"
+		
 		base.taskMgr.add(self.run, "run")
 		base.taskMgr.add(self.movePlayers, "movePlayers")
 		
@@ -508,6 +589,7 @@ class ServerConnection():
 		"""
 		task.delayTime = UPDATE_INTERVAL
 		try:
+			
 			# Send the current player position/heading
 			try:
 				playerActorPos = zlib.compress(json.dumps([base.playerActor.getX(),base.playerActor.getY(),base.playerActor.getZ(),base.playerActor.getH(),len(base.playerActor.tail.tailObjects)]))
@@ -517,17 +599,35 @@ class ServerConnection():
 			
 			# Ask for the world
 			self.socket.sendto(b'REQ WORLD', (self.server, self.port))
+			
 			data = self.socket.recv(1024)
+			
 			if data[0:7] == "PLAYERS":
+				# Got the world back!
 				players = json.loads(zlib.decompress(data[8:]))
 				self.placeOtherPlayers(players)
+			elif data[0:6] == "PLAYER":
+				# Got a new player!
+				dataD = json.loads(zlib.decompress(data[7:]))
+				self.addPlayer(dataD[0], dataD[1])
 			elif data == "KICKED":
 				# Hey! I'm kicked!?
 				print "You were kicked from the server."
+			elif data[0:3] == "MSG":
+				# Gets (msg, nick)
+				msgandnick = json.loads(zlib.decompress(data[4:]))
+				base.ost.addChat(msgandnick[0], msgandnick[1])
+			
 		except socket.error:
 			print "Connection lost."
 			return Task.done
 		return Task.again
+	
+	def sendChat(self, chatmsg):
+		"""
+		Send a chatmessage to the server
+		"""
+		self.socket.sendto("MSG " + zlib.compress(chatmsg), (self.server, self.port))
 	
 	def placeOtherPlayers(self, players):
 		"""
@@ -559,7 +659,6 @@ class ServerConnection():
 		Update a player, or add it when it's not yet there
 		"""
 		# Check if the player is already there
-		foundPlayer = False
 		for player in self.otherplayers:
 			if player.addr == addr:
 				# Update the position/heading smoothly
@@ -567,21 +666,15 @@ class ServerConnection():
 				player.smoothMover.setHpr(Vec3(h, 0, 0))
 				player.smoothMover.setTimestamp(globalClock.getFrameTime())
 				player.smoothMover.markPosition()
-				foundPlayer = True
 				
 				# Update the tail
 				player.tail.setObjects(tailLength)
 		
-		# If the player is not already there, add it
-		if not foundPlayer:
-			newPlayer = OtherPlayer(addr)
-			newPlayer.reparentTo(base.render)
-			newPlayer.setScale(0.005, 0.005, 0.005)
-			newPlayer.setFluidPos(cx, cy, cz)
-			self.otherplayers.append(newPlayer)
-			
-			# Set the tail
-			newPlayer.tail.setObjects(tailLength)
+	def addPlayer(self, addr, nickname):
+		newPlayer = OtherPlayer(addr, nickname)
+		newPlayer.reparentTo(base.render)
+		newPlayer.setScale(0.005, 0.005, 0.005)
+		self.otherplayers.append(newPlayer)
 	
 	def movePlayers(self, task):
 		"""
