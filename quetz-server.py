@@ -1,4 +1,18 @@
-# this file belongs to snake.py
+#    Quetz development version
+#   Copyright (C) 2011 Milan Boers
+#
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import socket
 import threading
@@ -125,9 +139,9 @@ class UDPHandler(object):
 				self.connectedClients.remove(client)
 				break
 
-class SnakeServer():
+class QuetzServer():
 	def __init__(self, port):
-		print "SNAKE SERVER v 0.01 STARTED"
+		print "QUETZ SERVER v 0.01 STARTED"
 		
 		# Setup the world as it looks like on this server
 		world = World()
@@ -149,4 +163,4 @@ class SnakeServer():
 				self.udphandler.removeClient(addr)
 				pass
 
-server = SnakeServer(PORT)
+server = QuetzServer(PORT)
