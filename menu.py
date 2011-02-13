@@ -28,12 +28,15 @@ class MainMenu(DirectGuiWidget):
 		
 		def newGame():
 			if serverEdit.get() == "":
-				game.startGame()
+				game.startGame(None, nicknameEdit.get())
 			else:
-				game.startGame(serverEdit.get())
+				game.startGame(serverEdit.get(), nicknameEdit.get())
 		
 		def setServer(textEntered):
 			print textEntered
+		
+		def setNickname(textEntered):
+			print setNickname
 		
 		def setJoypad(status):
 			if status:
@@ -53,6 +56,9 @@ class MainMenu(DirectGuiWidget):
 		# Add widgets
 		b = DirectLabel(text = "Enter server IP (v4): ", scale = .05, pos = (-0.2 , 0, 0.5 ),                          parent=self)
 		serverEdit = DirectEntry(text = "" ,             scale = .05, pos = ( 0.05, 0, 0.5 ), command=setServer,       parent=self)
+		
+		b = DirectLabel(text = "Nickname: ",             scale = .05, pos = (-0.2 , 0, 0.4 ),                          parent=self)
+		nicknameEdit = DirectEntry(text = "" ,           scale = .05, pos = ( 0.05, 0, 0.4 ), command=setNickname,     parent=self)
 		
 		b = DirectCheckButton(text = "Joypad support",   scale = .05, pos = ( 0   , 0, 0.3 ), command = setJoypad,     parent=self)
 		b = DirectCheckButton(text = "Fullscreen",       scale = .05, pos = ( 0   , 0, 0.2 ), command = setFullscreen, parent=self)

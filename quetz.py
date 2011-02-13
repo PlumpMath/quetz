@@ -20,7 +20,8 @@ import socket
 import json
 import zlib
 # According to the manual of Panda3D, this is unsafe. But seeing that the Panda3D threads are actually fake, I still use these.
-#import threading
+import threading
+import thread
 import time
 
 import menu
@@ -36,7 +37,10 @@ from direct.task import Task
 from direct.actor.Actor import Actor
 from pandac.PandaModules import AntialiasAttrib, NodePath, SmoothMover, WindowProperties, ClockObject
 from panda3d.core import Point3, Vec3, CollisionSphere, CollisionNode, CollisionHandlerEvent, CollisionTraverser, CollisionHandlerPusher
-#from direct.stdpy import threading
+
+from direct.gui.OnscreenText import OnscreenText
+from direct.gui.DirectGui import *
+from direct.gui.DirectGuiBase import DirectGuiWidget
  
 from pandac.PandaModules import TextNode
 
@@ -45,16 +49,32 @@ TAILOBJ_DIST    = 5
 # Interval between network updates
 UPDATE_INTERVAL = 0.15
 
+# UI
+class OST(object):
+	# Controls onscreen text	
+	def showMessage(self, msg, secs):
+		try:
+			self.timer.cancel()
+			self.message.destroy()
+		except AttributeError:
+			pass
+		self.message = OnscreenText(text = msg, scale = .15, pos = ( 0,0), fg=(1,0,0,1), shadow=(0,0,0,0.5))
+		self.timer = threading.Timer(secs, self.removeMessage)
+		self.timer.start()
+	
+	def removeMessage(self):
+		self.message.destroy()
+# END UI
+
 # JOYPAD CONTROL
 class JoypadControl():
-	def __init__(self, game, panda):
-		self.game = game
-		self.panda = panda
+	def __init__(self, playerActor):
+		self.playerActor = playerActor
 		#threading.Thread.__init__(self)
 		#self.daemon = True
 		
 	def start(self):
-		self.game.taskMgr.add(self.run, "joypadControl", sort=1)
+		base.taskMgr.add(self.run, "joypadControl", sort=1)
 	
 	def run(self, task):
 		#while True:
@@ -65,17 +85,17 @@ class JoypadControl():
 		yA = []
 		# Try every joypad
 		try:
-			xA.append(self.game.joypad.c1.get_axis(0))
-			yA.append(self.game.joypad.c1.get_axis(1))
+			xA.append(base.joypad.c1.get_axis(0))
+			yA.append(base.joypad.c1.get_axis(1))
 			try:
-				xA.append(self.game.joypad.c2.get_axis(0))
-				yA.append(self.game.joypad.c2.get_axis(1))
+				xA.append(base.joypad.c2.get_axis(0))
+				yA.append(base.joypad.c2.get_axis(1))
 				try:
-					xA.append(self.game.joypad.c3.get_axis(0))
-					yA.append(self.game.joypad.c3.get_axis(1))
+					xA.append(base.joypad.c3.get_axis(0))
+					yA.append(base.joypad.c3.get_axis(1))
 					try:
-						xA.append(self.game.joypad.c4.get_axis(0))
-						yA.append(self.game.joypad.c4.get_axis(1))
+						xA.append(base.joypad.c4.get_axis(0))
+						yA.append(base.joypad.c4.get_axis(1))
 					except:
 						pass
 				except:
@@ -90,97 +110,126 @@ class JoypadControl():
 			return Task.done
 			#break
 		# Change the position (if the keys are not pressed)
-		if not self.panda.walkingByKeys:
-			self.panda.changePosition(x, y)
+		if not self.playerActor.walkingByKeys:
+			self.playerActor.changePosition(x, y)
 		#time.sleep(0.01)
 		return Task.cont
 # END JOYPAD CONTROL
 
 # PLAYER OBJECTS
-class Panda(Actor):
+class PlayerActor(Actor):
 	"""
 	The player
 	"""
-	def __init__(self, game):
-		super(Panda,self).__init__("models/panda-model", {"walk":"models/panda-walk4"})
-		self.game = game
+	def __init__(self, nickname):
+		super(PlayerActor,self).__init__("models/panda-model", {"walk":"models/panda-walk4"})
 		self.setScale(0.005, 0.005, 0.005)
-		self.reparentTo(self.game.render)
+		self.reparentTo(base.render)
 		
 		self.walking = False
 		self.walkingByKeys = False
-		self.path = []
+		
+		# Some properties
+		self.lives = 3
+		self.invincible = True
+		self.nickname = nickname
+		
+		# Create the nickname label
+		text = TextNode("nicknameLabel")
+		text.setText(self.nickname)
+		text.setTextColor(1, 0, 0, 1)
+		self.nicknameLabel = NodePath(text)
+		self.nicknameLabel.reparentTo(base.render)
+		
+		# Create the tail, not tangible
+		self.tail = Tail(self)
 		
 		# Add tasks
-		self.game.taskMgr.add(self.savePath,"pandaSavePath")
-		self.game.taskMgr.add(self.walkPandaTask, "walkPandaTast")
+		base.taskMgr.add(self.walkPlayerTask, "walkPlayerTast")
+		base.taskMgr.add(self.moveNickLabel, "moveNickLabel")
 		
-		# Contains all the tail objects
-		self.tailObjects = []
-			
-		# Create collision solid for panda
+		# Add invincibility
+		thread.start_new_thread(self.makeInvincible, (5,))
+		
+		# Create collision solid for playerActor
 		cs = CollisionSphere(0, 0, 200, 400)
-		cnodePath = self.attachNewNode(CollisionNode('panda'))
+		cnodePath = self.attachNewNode(CollisionNode('playerActor'))
 		cnodePath.node().addSolid(cs)
 		cnodePath.show()
 		
 		# Add to the pusher
-		game.pusher.addCollider(cnodePath, self)
-		base.cTrav.addCollider(cnodePath, game.pusher)
+		base.pusher.addCollider(cnodePath, self)
+		base.cTrav.addCollider(cnodePath, base.pusher)
 		
 		# Key events
-		self.game.accept("w",self.movePandaForward)
-		self.game.accept("w-up",self.stopMovePandaForward)
-		self.game.accept("a",self.rotatePandaLeft)
-		self.game.accept("a-up",self.stopRotatePandaLeft)
-		self.game.accept("d",self.rotatePandaRight)
-		self.game.accept("d-up",self.stopRotatePandaRight)
-		self.game.accept("s",self.movePandaBackward)
-		self.game.accept("s-up",self.stopMovePandaBackward)
+		base.accept("w",self.movePlayerForward)
+		base.accept("w-up",self.stopMovePlayerForward)
+		base.accept("a",self.rotatePlayerLeft)
+		base.accept("a-up",self.stopRotatePlayerLeft)
+		base.accept("d",self.rotatePlayerRight)
+		base.accept("d-up",self.stopRotatePlayerRight)
+		base.accept("s",self.movePlayerBackward)
+		base.accept("s-up",self.stopMovePlayerBackward)
 		
 		# Joypad events
-		self.game.accept("C1_NORTH-BUTTON_DOWN", self.movePandaForward)
-		self.game.accept("C1_NORTH-BUTTON_UP", self.stopMovePandaForward)
-		self.game.accept("C1_SOUTH-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C1_SOUTH-BUTTON_UP", self.stopMovePandaBackward)
-		self.game.accept("C1_EAST-BUTTON_DOWN", self.rotatePandaRight)
-		self.game.accept("C1_EAST-BUTTON_UP", self.stopRotatePandaRight)
-		self.game.accept("C1_WEST-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C1_WEST-BUTTON_UP", self.stopMovePandaBackward)
+		base.accept("C1_NORTH-BUTTON_DOWN", self.movePlayerForward)
+		base.accept("C1_NORTH-BUTTON_UP", self.stopMovePlayerForward)
+		base.accept("C1_SOUTH-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C1_SOUTH-BUTTON_UP", self.stopMovePlayerBackward)
+		base.accept("C1_EAST-BUTTON_DOWN", self.rotatePlayerRight)
+		base.accept("C1_EAST-BUTTON_UP", self.stopRotatePlayerRight)
+		base.accept("C1_WEST-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C1_WEST-BUTTON_UP", self.stopMovePlayerBackward)
 		
-		self.game.accept("C2_NORTH-BUTTON_DOWN", self.movePandaForward)
-		self.game.accept("C2_NORTH-BUTTON_UP", self.stopMovePandaForward)
-		self.game.accept("C2_SOUTH-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C2_SOUTH-BUTTON_UP", self.stopMovePandaBackward)
-		self.game.accept("C2_EAST-BUTTON_DOWN", self.rotatePandaRight)
-		self.game.accept("C2_EAST-BUTTON_UP", self.stopRotatePandaRight)
-		self.game.accept("C2_WEST-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C2_WEST-BUTTON_UP", self.stopMovePandaBackward)
+		base.accept("C2_NORTH-BUTTON_DOWN", self.movePlayerForward)
+		base.accept("C2_NORTH-BUTTON_UP", self.stopMovePlayerForward)
+		base.accept("C2_SOUTH-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C2_SOUTH-BUTTON_UP", self.stopMovePlayerBackward)
+		base.accept("C2_EAST-BUTTON_DOWN", self.rotatePlayerRight)
+		base.accept("C2_EAST-BUTTON_UP", self.stopRotatePlayerRight)
+		base.accept("C2_WEST-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C2_WEST-BUTTON_UP", self.stopMovePlayerBackward)
 		
-		self.game.accept("C3_NORTH-BUTTON_DOWN", self.movePandaForward)
-		self.game.accept("C3_NORTH-BUTTON_UP", self.stopMovePandaForward)
-		self.game.accept("C3_SOUTH-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C3_SOUTH-BUTTON_UP", self.stopMovePandaBackward)
-		self.game.accept("C3_EAST-BUTTON_DOWN", self.rotatePandaRight)
-		self.game.accept("C3_EAST-BUTTON_UP", self.stopRotatePandaRight)
-		self.game.accept("C3_WEST-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C3_WEST-BUTTON_UP", self.stopMovePandaBackward)
+		base.accept("C3_NORTH-BUTTON_DOWN", self.movePlayerForward)
+		base.accept("C3_NORTH-BUTTON_UP", self.stopMovePlayerForward)
+		base.accept("C3_SOUTH-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C3_SOUTH-BUTTON_UP", self.stopMovePlayerBackward)
+		base.accept("C3_EAST-BUTTON_DOWN", self.rotatePlayerRight)
+		base.accept("C3_EAST-BUTTON_UP", self.stopRotatePlayerRight)
+		base.accept("C3_WEST-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C3_WEST-BUTTON_UP", self.stopMovePlayerBackward)
 		
-		self.game.accept("C4_NORTH-BUTTON_DOWN", self.movePandaForward)
-		self.game.accept("C4_NORTH-BUTTON_UP", self.stopMovePandaForward)
-		self.game.accept("C4_SOUTH-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C4_SOUTH-BUTTON_UP", self.stopMovePandaBackward)
-		self.game.accept("C4_EAST-BUTTON_DOWN", self.rotatePandaRight)
-		self.game.accept("C4_EAST-BUTTON_UP", self.stopRotatePandaRight)
-		self.game.accept("C4_WEST-BUTTON_DOWN", self.movePandaBackward)
-		self.game.accept("C4_WEST-BUTTON_UP", self.stopMovePandaBackward)
+		base.accept("C4_NORTH-BUTTON_DOWN", self.movePlayerForward)
+		base.accept("C4_NORTH-BUTTON_UP", self.stopMovePlayerForward)
+		base.accept("C4_SOUTH-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C4_SOUTH-BUTTON_UP", self.stopMovePlayerBackward)
+		base.accept("C4_EAST-BUTTON_DOWN", self.rotatePlayerRight)
+		base.accept("C4_EAST-BUTTON_UP", self.stopRotatePlayerRight)
+		base.accept("C4_WEST-BUTTON_DOWN", self.movePlayerBackward)
+		base.accept("C4_WEST-BUTTON_UP", self.stopMovePlayerBackward)
+		
+		# Other events
 		
 		# Axis task
-		joypadcontrol = JoypadControl(self.game, self)
+		joypadcontrol = JoypadControl(self)
 		joypadcontrol.start()
 	
-	def pandaDies(self, entry):
-		print "AAAHHH"
+	def loseLife(self):
+		if not self.invincible:
+			if self.lives == 0:
+				self.die()
+			else:
+				self.lives -= 1
+				base.ost.showMessage("Lives left: " + str(self.lives) + "!", 5)
+				thread.start_new_thread(self.makeInvincible, (3,))
+	
+	def die(self):
+		base.ost.showMessage("YOU DIE!", 5)
+	
+	def moveNickLabel(self, task):
+		self.nicknameLabel.setPos(self.getX(), self.getY(), 3)
+		self.nicknameLabel.setHpr(base.camera, 0, 0, 0)
+		return Task.cont
 	
 	def changePosition(self, x, y):
 		if x > 1:
@@ -194,22 +243,7 @@ class Panda(Actor):
 		self.setPos(self, 0, y * 300, 0)
 		self.setHpr(self, x * -1.5, 0, 0)
 	
-	def addObjectToTail(self):
-		"""
-		Add a TailObject to the tail of the Panda
-		"""
-		tailObject = TailObject(self, self.game.collHandEvent, len(self.tailObjects))
-		tailObject.reparentTo(self.game.render)
-		self.tailObjects.append(tailObject)
-	
-	def updateTail(self):
-		"""
-		Updates the position of all TailObjects
-		"""
-		for tailObj in self.tailObjects:
-			tailObj.updatePosition()
-	
-	def walkPandaTask(self, task):
+	def walkPlayerTask(self, task):
 		"""
 		Controls the character's animtation on walking
 		"""
@@ -220,69 +254,59 @@ class Panda(Actor):
 			self.stop("walk")
 		return Task.cont
 	
-	def savePath(self, task):
-		"""
-		Task: Saves the path of the Panda, so the snake can follow
-		"""
-		#task.delayTime = 0.01
-		# Don't save or update tail when youre standing still
-		try:
-			#if self.previousPos <> self.getPos():
-			self.path.append(self.getPos())
-			# Delete the path thats unnecessary for this length of tail, but keep it at a minimum of 10 (for networking)
-			if len(self.path) > len(self.tailObjects) * TAILOBJ_DIST + 10:
-				del self.path[0]
-			# Update the tail
-			self.updateTail()
-		except AttributeError:
-			pass
-		self.previousPos = self.getPos()
-		return Task.cont
+	def makeInvincible(self, secs):
+		self.invincible = True
+		for i in xrange(secs):
+			base.ost.showMessage(str(secs-i), 1)
+			time.sleep(1)
+		base.ost.showMessage("START", 2)
+		self.invincible = False
+		time.sleep(2)
 	
 	"""
 	These methods add tasks for moving to the taskmanager
 	"""
-	def movePandaForward(self):
-		self.game.taskMgr.add(self.moveForwardTask, "movePandaForwardTask")
+	def movePlayerForward(self):
+		base.taskMgr.add(self.moveForwardTask, "movePlayerForwardTask")
 	
-	def movePandaBackward(self):
-		self.game.taskMgr.add(self.moveBackwardTask, "movePandaBackwardTask")
+	def movePlayerBackward(self):
+		base.taskMgr.add(self.moveBackwardTask, "movePlayerBackwardTask")
 	
-	def rotatePandaLeft(self):
-		self.game.taskMgr.add(self.rotateLeftTask, "rotatePandaLeftTask")
+	def rotatePlayerLeft(self):
+		base.taskMgr.add(self.rotateLeftTask, "rotatePlayerLeftTask")
 	
-	def rotatePandaRight(self):
-		self.game.taskMgr.add(self.rotateRightTask, "rotatePandaRightTask")
+	def rotatePlayerRight(self):
+		base.taskMgr.add(self.rotateRightTask, "rotatePlayerRightTask")
 		
 	"""
 	These methods remove tasks for moving from the taskmanager
 	"""
-	def stopMovePandaForward(self):
+	def stopMovePlayerForward(self):
 		self.walking = False
 		self.walkingByKeys = False
-		self.game.taskMgr.remove("movePandaForwardTask")
+		base.taskMgr.remove("movePlayerForwardTask")
 	
-	def stopMovePandaBackward(self):
+	def stopMovePlayerBackward(self):
 		self.walking = False
 		self.walkingByKeys = False
-		self.game.taskMgr.remove("movePandaBackwardTask")
+		base.taskMgr.remove("movePlayerBackwardTask")
 		
-	def stopRotatePandaLeft(self):
+	def stopRotatePlayerLeft(self):
 		self.walking = False
 		self.walkingByKeys = False
-		self.game.taskMgr.remove("rotatePandaLeftTask")
+		base.taskMgr.remove("rotatePlayerLeftTask")
 		
-	def stopRotatePandaRight(self):
+	def stopRotatePlayerRight(self):
 		self.walking = False
 		self.walkingByKeys = False
-		self.game.taskMgr.remove("rotatePandaRightTask")
+		base.taskMgr.remove("rotatePlayerRightTask")
 	
 	"""
-	These methods move the panda
+	These methods move the playerActor
 	"""
 	def moveForwardTask(self, task):
 		"""
-		Task: Move the Panda forward
+		Task: Move the Player forward
 		"""
 		self.walking = True
 		self.walkingByKeys = True
@@ -291,7 +315,7 @@ class Panda(Actor):
 	
 	def moveBackwardTask(self, task):
 		"""
-		Task: Move the Panda backwards
+		Task: Move the Player backwards
 		"""
 		self.walking = True
 		self.walkingByKeys = True
@@ -300,7 +324,7 @@ class Panda(Actor):
 	
 	def rotateLeftTask(self, task):
 		"""
-		Task: Rotate the Panda to the left
+		Task: Rotate the Player to the left
 		"""
 		self.walking = True
 		self.walkingByKeys = True
@@ -309,34 +333,112 @@ class Panda(Actor):
 	
 	def rotateRightTask(self, task):
 		"""
-		Task: Rotate the Panda to the right
+		Task: Rotate the Player to the right
 		"""
 		self.walking = True
 		self.walkingByKeys = True
 		self.changePosition(1, 0)
 		return Task.cont
+
+class Tail(object):
+	def __init__(self, followObj):
+		self.path = []
+		self.tailObjects = []
+		self.followObj = followObj
+		
+		self.taskId = uuid.uuid1()
+		base.taskMgr.add(self.savePath, str(self.taskId))
 	
+	def addObject(self):
+		"""
+		Add a TailObject to this tail
+		"""
+		tailObject = TailObject(self, len(self.tailObjects))
+		tailObject.reparentTo(base.render)
+		self.tailObjects.append(tailObject)
+		
+	def removeObject(self, tailObject):
+		"""
+		Removes an object from the tail
+		"""
+		base.taskMgr.remove(str(self.taskId))
+		tailObject.remove()
+		self.tailObjects.remove(tailObject)
+	
+	def setObjects(self, number):
+		change = abs(number - len(self.tailObjects))
+		if number > len(self.tailObjects):
+			for i in xrange(change):
+				self.addObject()
+		elif number < len(self.tailObjects):
+			for i in xrange(change):
+				self.removeObject()
+	
+	def updateTail(self):
+		"""
+		Updates the position of all TailObjects
+		"""
+		for tailObj in self.tailObjects:
+			tailObj.updatePosition()
+	
+	def savePath(self, task):
+		"""
+		Task: Saves the path of the followed, so the snake can follow
+		"""
+		try:
+			self.path.append(self.followObj.getPos())
+			# Delete the path thats unnecessary for this length of tail, but keep it at a minimum of 10 (for networking)
+			if len(self.path) > len(self.tailObjects) * TAILOBJ_DIST + 10:
+				del self.path[0]
+			# Update the tail
+			self.updateTail()
+		except AttributeError:
+			# Tail not long enough. Just ignore this
+			pass
+		except AssertionError:
+			# Player is gone, but task is still running. Delete the player.
+			self.followObj.remove()
+			return Task.done
+		return Task.cont
+	
+	def remove(self):
+		for tailObj in self.tailObjects:
+			tailObj.remove()
+
 class TailObject(NodePath):
 	"""
 	One of the objects behind the player which together make the tail
 	"""
-	def __init__(self, panda, collHandEvent, position):
+	def __init__(self, tail, position):
 		np = loader.loadModel("models/smiley")
 		node = np.node()
 		NodePath.__init__(self, node)
 		
-		self.panda = panda
+		self.tail = tail
 		#number in the row of tailobjects
 		self.position = position
 		
+		self.id = uuid.uuid1()
+		
 		#sphere
+		self._addCollider()
+		
+		## Oops. Problem. You crashed into someone else.
+		base.accept(str(self.id) + "-into-playerActor", self.playerActorDies)
+	
+	def playerActorDies(self, event):
+		#print self.tail.followObj
+		if self.tail.followObj <> base.playerActor:
+			base.playerActor.loseLife()
+	
+	def _addCollider(self):
 		cs = CollisionSphere(0,0,0,2)
 		cs.setTangible(False)
 		cnodePath = self.attachNewNode(CollisionNode(str(self.id)))
 		cnodePath.node().addSolid(cs)
 		cnodePath.show()
 		
-		base.cTrav.addCollider(cnodePath, collHandEvent)
+		base.cTrav.addCollider(cnodePath, base.collHandEvent)
 	
 	def updatePosition(self):
 		"""
@@ -344,11 +446,34 @@ class TailObject(NodePath):
 		"""
 		try:
 			index = -((self.position+1)*TAILOBJ_DIST)
-			self.setPos(self.panda.path[index])
+			self.setPos(self.tail.path[index])
 		except IndexError:
-			self.setPos(self.panda.path[0])
+			self.setPos(self.tail.path[0])
 	
 	def remove(self):
+		self.removeNode()
+
+class OtherPlayer(NodePath):
+	"""
+	Another player in the world (either AI or networking)
+	"""
+	def __init__(self, addr=None):
+		np = loader.loadModel("models/panda-model")
+		node = np.node()
+		NodePath.__init__(self, node)
+		
+		self.addr = addr
+		print "NEW PLAYER! " + str(self.addr)
+		
+		self.smoothMover = SmoothMover()
+		self.smoothMover.setPredictionMode(1)
+		self.smoothMover.setSmoothMode(1)
+		
+		# Tail
+		self.tail = Tail(self)
+	
+	def remove(self):
+		self.tail.remove()
 		self.removeNode()
 # END PLAYER OBJECTS
 
@@ -357,10 +482,9 @@ class ServerConnection():
 	"""
 	Connection to a server
 	"""
-	def __init__(self, server, game):
+	def __init__(self, server):
 		#threading.Thread.__init__(self)
 		#super(ServerConnection, self).__init__(self)
-		self.game = game
 		
 		self.timer = time.time()
 		
@@ -369,14 +493,12 @@ class ServerConnection():
 		
 		self.port = 44454
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		# Disable Nagle algorithm
-		#self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY,1)
-		#self.socket.connect((server, port))
+		
 		self.server = server
 		#threading.Thread.__init__(self)
 		
-		self.game.taskMgr.add(self.run, "run")
-		self.game.taskMgr.add(self.movePlayers, "movePlayers")
+		base.taskMgr.add(self.run, "run")
+		base.taskMgr.add(self.movePlayers, "movePlayers")
 		
 		self.daemon = True
 	
@@ -384,14 +506,12 @@ class ServerConnection():
 		"""
 		This is what the server does every UPDATE_INTERVAL seconds
 		"""
-		#while time.time() + UPDATE_INTERVAL >= self.timer:
-		#	self.timer = time.time()
 		task.delayTime = UPDATE_INTERVAL
 		try:
 			# Send the current player position/heading
 			try:
-				pandaPos = zlib.compress(json.dumps([self.game.pandaActor.getX(),self.game.pandaActor.getY(),self.game.pandaActor.getZ(),self.game.pandaActor.getH()]))
-				self.socket.sendto(b'SEND P POS ' + pandaPos, (self.server, self.port))
+				playerActorPos = zlib.compress(json.dumps([base.playerActor.getX(),base.playerActor.getY(),base.playerActor.getZ(),base.playerActor.getH(),len(base.playerActor.tail.tailObjects)]))
+				self.socket.sendto(b'SEND PLAYER ' + playerActorPos, (self.server, self.port))
 			except socket.error:
 				print "Huh what happened?"
 			
@@ -425,16 +545,16 @@ class ServerConnection():
 		
 		# Update all players
 		for player in players:
-			self.updatePlayer(player[0], player[1], player[2], player[3], player[4])
+			self.updatePlayer(player[0], player[1], player[2], player[3], player[4], player[5])
 	
 	def removePlayer(self, player):
 		"""
 		Remove a player from the world
 		"""
 		self.otherplayers.remove(player)
-		player.removeNode()
+		player.remove()
 	
-	def updatePlayer(self, addr, cx, cy, cz, h):
+	def updatePlayer(self, addr, cx, cy, cz, h, tailLength):
 		"""
 		Update a player, or add it when it's not yet there
 		"""
@@ -448,14 +568,20 @@ class ServerConnection():
 				player.smoothMover.setTimestamp(globalClock.getFrameTime())
 				player.smoothMover.markPosition()
 				foundPlayer = True
+				
+				# Update the tail
+				player.tail.setObjects(tailLength)
 		
 		# If the player is not already there, add it
 		if not foundPlayer:
-			newPlayer = worldObjects.OtherPlayer(addr)
-			newPlayer.reparentTo(self.game.render)
+			newPlayer = OtherPlayer(addr)
+			newPlayer.reparentTo(base.render)
 			newPlayer.setScale(0.005, 0.005, 0.005)
 			newPlayer.setFluidPos(cx, cy, cz)
 			self.otherplayers.append(newPlayer)
+			
+			# Set the tail
+			newPlayer.tail.setObjects(tailLength)
 	
 	def movePlayers(self, task):
 		"""
@@ -469,6 +595,7 @@ class ServerConnection():
 		self.socket.close()
 # END NETWORKING
 
+# MAIN APPLICATION
 class Quetz(ShowBase):
 	"""
 	The game itself
@@ -478,18 +605,22 @@ class Quetz(ShowBase):
 		self.menu = menu.MainMenu(self)
 		self.run()
 	
-	def startGame(self, server = None):
+	def startGame(self, server = None, nickname = None):
 		self.menu.destroy()
 		
 		self.cameraDistance = 5000
+		self.cameraAngle = 0
 		
 		# Set options
 		self.render.setAntialias(AntialiasAttrib.MAuto)
+		base.disableMouse()
 		
 		# Fixed framerate
-		
 		globalClock.setMode(ClockObject.MLimited)
 		globalClock.setFrameRate(40)
+		
+		# Load the onscreentext
+		base.ost = OST()
 		
 		# Get the world
 		map = worlds.NormalMap.World()
@@ -515,11 +646,11 @@ class Quetz(ShowBase):
 		# Load catchables
 		self.catchables = []
 		for catchable in map.catchables:
-			catchableObj = worldObjects.Catchable(self, self.loader, self.render, self.collHandEvent, *catchable)
+			catchableObj = worldObjects.Catchable(self.loader, self.render, self.collHandEvent, *catchable)
 			self.catchables.append(catchableObj)
 		
 		# Load panda
-		self.pandaActor = Panda(self)
+		self.playerActor = PlayerActor(nickname)
 		
 		# Load rocks
 		for rock in map.rocks:
@@ -530,7 +661,7 @@ class Quetz(ShowBase):
 		
 		# Sending to server task
 		if server <> None:
-			self.serverConnection = ServerConnection(server, self)
+			self.serverConnection = ServerConnection(server)
 		
 		# Other events
 		self.accept("window-event",self.windowEvent)
@@ -538,12 +669,51 @@ class Quetz(ShowBase):
 		self.accept("wheel_up",self.decreaseCamDist)
 		self.accept("escape",self.quitGame)
 		
+		self.accept("mouse1",self.turnCamera)
+		self.accept("mouse1-up",self.stopTurnCamera)
+		
+		self.accept("mouse3",self.lookBehind)
+	
+	def turnCamera(self):
+		base.taskMgr.add(self.turnCameraTask, "turnCameraTask")
+	
+	def stopTurnCamera(self):
+		base.taskMgr.remove("turnCameraTask")
+		base.taskMgr.add(self.resetCamera, "resetCamera")
+	
+	def lookBehind(self):
+		self.cameraDistance = -self.cameraDistance
+	
+	def resetCamera(self, task):
+		if self.cameraAngle < -500 or self.cameraAngle > 500:
+			if self.cameraAngle < -500:
+				self.cameraAngle += 500
+			elif self.cameraAngle > -500:
+				self.cameraAngle -= 500
+		else:
+			self.cameraAngle = 0
+			return Task.done
+		return Task.cont
+	
+	def turnCameraTask(self, task):
+		try:
+			if base.mouseWatcherNode.getMouseX() > self.prevX:
+				self.cameraAngle += 500
+			elif base.mouseWatcherNode.getMouseX() < self.prevX:
+				self.cameraAngle -= 500
+		except AttributeError:
+			# This is the first time and prevX isnt defined yet
+			pass
+		self.prevX = base.mouseWatcherNode.getMouseX()
+		#self.prevY = base.mouseWatcherNode.getMouseY()
+		return Task.cont
+	
 	def spinCameraTask(self, task):
 		"""
 		Controls the moving of the camera
 		"""
-		self.camera.setPos(self.pandaActor, 0, self.cameraDistance, 1000)
-		self.camera.lookAt(self.pandaActor)
+		self.camera.setPos(self.playerActor, self.cameraAngle, self.cameraDistance, 1000)
+		self.camera.lookAt(self.playerActor)
 		return Task.cont
 	
 	def increaseCamDist(self):
@@ -564,5 +734,6 @@ class Quetz(ShowBase):
 	
 	def quitGame(self):
 		quit()
-		
+# END MAIN APPLICATION
+	
 app = Quetz()

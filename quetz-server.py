@@ -26,18 +26,15 @@ PORT = 44454
 TIMEOUT_TIME = 1
 
 class PlayerInWorld(object):
-	def __init__(self, x, y, z, h, addr):
+	def __init__(self, x, y, z, h, tailLength, addr):
 		self.x = x
 		self.y = y
 		self.z = z
 		self.h = h
+		
+		self.tailLength = tailLength
+		
 		self.addr = addr
-
-class TailObjectInWorld(object):
-	def __init__(self, x, y, z):
-		self.x = x
-		self.y = y
-		self.z = z
 
 class World(object):
 	"""
@@ -46,7 +43,7 @@ class World(object):
 	def __init__(self):
 		self.players = []
 	
-	def updatePlayer(self, x, y, z, h, addr):
+	def updatePlayer(self, x, y, z, h, tailLength, addr):
 		playerFound = False
 		for player in self.players:
 			if player.addr == addr:
@@ -54,12 +51,15 @@ class World(object):
 				player.y = y
 				player.z = z
 				player.h = h
+				
+				player.tailLength = tailLength
+				
 				playerFound = True
 				break
 		
 		if not playerFound:
 			#add player
-			self.players.append(PlayerInWorld(x, y, z, h, addr))
+			self.players.append(PlayerInWorld(x, y, z, h, tailLength, addr))
 			print "PLAYER " + str(addr) + " ADDED"
 	
 	def removePlayer(self, addr):
@@ -73,7 +73,7 @@ class World(object):
 		for player in self.players:
 			# Not the player who is asking
 			if player.addr <> addr:
-				playersNotSelf.append([player.addr, player.x, player.y, player.z, player.h])
+				playersNotSelf.append([player.addr, player.x, player.y, player.z, player.h, player.tailLength])
 		
 		#return the players
 		return playersNotSelf
@@ -94,10 +94,10 @@ class ClientConnection(object):
 		if data == "REQ WORLD":
 			# Send the players
 			self.socket.sendto("PLAYERS " + zlib.compress(json.dumps(self.world.getPlayersNotSelf(self.addr))), self.addr)
-		elif data[0:10] == "SEND P POS":
+		elif data[0:11] == "SEND PLAYER":
 			try:
-				position = json.loads(zlib.decompress(data[11:]))
-				self.world.updatePlayer(position[0], position[1], position[2], position[3], self.addr)
+				position = json.loads(zlib.decompress(data[12:]))
+				self.world.updatePlayer(position[0], position[1], position[2], position[3], position[4], self.addr)
 			except ValueError:
 				pass
 	
