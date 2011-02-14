@@ -24,10 +24,19 @@ import uuid
 import random
 import math
 
+# Server port
 PORT = 44454
+# Player timeout
 TIMEOUT_TIME = 5
+# Admin password
+ADMIN_PASS = "Hello!"
+# Server welcome message
+WELCOME_MESSAGE = "Welcome to Milan's homeserver! Rules don't apply!"
 
-AI_NAMES = ["Zubie", "Krab"]
+# Nice AI names
+AI_NAMES = ["Zubie", "Fin", "Puck"]
+# Number of AI's
+AI_NUMBER = 1
 
 class PlayerInWorld(object):
 	def __init__(self, addr, nickname):
@@ -39,6 +48,14 @@ class PlayerInWorld(object):
 		
 		self.addr = addr
 		self.nickname = nickname
+	
+	def update(self, x, y, z, h, tailLength):
+		self.x = x
+		self.y = y
+		self.z = z
+		self.h = h
+		
+		self.tailLength = tailLength
 
 class AIPlayer(PlayerInWorld):
 	def __init__(self, world):
@@ -50,8 +67,14 @@ class AIPlayer(PlayerInWorld):
 		self.movingToX = 0
 		self.movingToY = 0
 		
+		self.tailLength = 5
+		
 		self.prevX = 0
 		self.prevY = 0
+		
+		self.index = random.randint(40,60)
+		self.sindex = random.randint(-5,5)
+		self.sindex2 = random.randint(-5,5)
 		
 		# Sets the next target
 		thread.start_new_thread(self.setTargetThread, ())
@@ -88,12 +111,12 @@ class AIPlayer(PlayerInWorld):
 	
 	def setTargetThread(self):
 		while True:
-			time.sleep(0.1)
+			time.sleep(2)
 			try:
 				self.closestPlayer = self.getClosestPlayer()
-				self.movingToX = self.closestPlayer.x + math.sin(math.radians(self.closestPlayer.h)) * 50
-				self.movingToY = self.closestPlayer.y - math.cos(math.radians(self.closestPlayer.h)) * 50
-				
+				self.movingToX = self.closestPlayer.x + math.sin(math.radians(self.closestPlayer.h)) * self.index + self.sindex
+				self.movingToY = self.closestPlayer.y - math.cos(math.radians(self.closestPlayer.h)) * self.index + self.sindex2
+			
 			except UnboundLocalError:
 				# No players
 				pass
@@ -115,7 +138,7 @@ class AIPlayer(PlayerInWorld):
 			# Set prevx and prevy
 			self.prevX = self.x
 			self.prevY = self.y
-				
+			
 			# Move towards it
 			if abs(self.x - self.movingToX) > 6:
 				if self.x > self.movingToX:
@@ -150,6 +173,11 @@ class World(object):
 		
 		#return the players
 		return playersNotSelf
+	
+	def getPlayerByName(self, name):
+		for player in self.players:
+			if player.name == name:
+				return player
 
 
 class ClientConnection(object):
@@ -173,7 +201,7 @@ class ClientConnection(object):
 		elif data[0:11] == "SEND PLAYER":
 			try:
 				position = json.loads(zlib.decompress(data[12:]))
-				self.updatePlayer(position[0], position[1], position[2], position[3], position[4])
+				self.player.update(position[0], position[1], position[2], position[3], position[4])
 			except ValueError:
 				pass
 		elif data[0:2] == "HS":
@@ -182,19 +210,33 @@ class ClientConnection(object):
 			# Send all the other players to this player
 			for player in self.world.players:
 				self.socket.sendto("PLAYER " + zlib.compress(json.dumps([player.addr, player.nickname])), self.addr)
+			# Send the welcome message
+			self.socket.sendto("MSG " + zlib.compress(json.dumps([WELCOME_MESSAGE])), self.addr)
 			
 			# Add this player to the world
 			self.addPlayer(data[3:])
 		elif data[0:3] == "MSG":
-			self.udphandler.multicast("MSG " + zlib.compress(json.dumps([zlib.decompress(data[4:]), self.player.nickname])))
-	
-	def updatePlayer(self, x, y, z, h, tailLength):
-		self.player.x = x
-		self.player.y = y
-		self.player.z = z
-		self.player.h = h
-		
-		self.player.tailLength = tailLength
+			# Got a message!
+			message = zlib.decompress(data[4:])
+			# Is this a command?
+			if message[0:1] == "/":
+				# This is a command!
+				# Is this an admin command?
+				if message[1:6] == "admin" and message[7:(7+len(ADMIN_PASS))] == ADMIN_PASS:
+					adminCommand = message[8+len(ADMIN_PASS):]
+					if adminCommand[0:3] == "MSG":
+						# This is an admin message
+						self.udphandler.multicast("MSG " + zlib.compress(json.dumps([adminCommand[4:], "ADMIN"])))
+					if adminCommand[0:4] == "KICK":
+						# Kick a player (by name)
+						self.udphandler.removeClient(self.world.getPlayerByName(adminCommand[5:]).addr)
+			else:
+				# This is a normal message
+				self.udphandler.multicast("MSG " + zlib.compress(json.dumps([message, self.player.nickname])))
+		elif data[0:4] == "DISC":
+			# Player disconnects
+			print "PLAYER " + self.player.nickname + " DISCONNECTED"
+			self.remove()
 	
 	def addPlayer(self, nickname):
 		self.player = PlayerInWorld(self.addr, nickname)
@@ -202,20 +244,19 @@ class ClientConnection(object):
 		self.udphandler.multicast("PLAYER " + zlib.compress(json.dumps([self.addr, nickname])), self.addr)
 		print "PLAYER " + nickname + " ADDED"
 	
-	def removePlayer(self):
-		self.world.players.remove(self.player)
-		print "PLAYER " + self.player.nickname + " KICKED"
-	
 	def checkTimeout(self):
-		while True:
-			if time.time() - self.lastrequest > TIMEOUT_TIME:
-				self.remove()
-				print "PLAYER TIMEOUT " + str(self.addr)
-				break
+		try:
+			while True:
+				if time.time() - self.lastrequest > TIMEOUT_TIME:
+					self.udphandler.removeClient(self.addr)
+					print "PLAYER TIMEOUT " + str(self.addr)
+					break
+		except ValueError:
+			# Player already gone
+			pass
 	
-	def remove(self):
-		self.removePlayer()
-		self.udphandler.connectedClients.remove(self)
+	def remove(self):	
+		self.world.players.remove(self.player)
 
 
 class UDPHandler(object):
@@ -241,8 +282,8 @@ class UDPHandler(object):
 	def removeClient(self, addr):
 		for client in self.connectedClients:
 			if client.addr == addr:
-				client.remove()
 				self.connectedClients.remove(client)
+				client.remove()
 				break
 	
 	def multicast(self, msg, addr=None):
@@ -268,7 +309,8 @@ class QuetzServer():
 		self.udphandler = UDPHandler(world, self.socket)
 		
 		# AI
-		AIPlayer(world)
+		for i in xrange(AI_NUMBER):
+			AIPlayer(world)
 		
 		# The daemon
 		while True:

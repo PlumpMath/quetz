@@ -23,18 +23,17 @@ class Catchable(NodePath):
 	"""
 	Stuff that the player can pick up for the tail to get longer
 	"""
-	def __init__(self,loader,render,collHandEvent,cx,cy,cz):
+	def __init__(self,cx,cy,cz):
 		# load the model
-		np = loader.loadModel("models/smiley")
+		np = base.loader.loadModel("models/smiley")
 		node = np.node()
 		NodePath.__init__(self, node)
 		
 		# give some properties
 		self.id = uuid.uuid1()
-		self.loader = loader
 		
 		# change some properties
-		self.reparentTo(render)
+		self.reparentTo(base.render)
 		self.setPos(cx,cy,cz)
 		
 		#sphere
@@ -42,8 +41,8 @@ class Catchable(NodePath):
 		cs.setTangible(False)
 		cnodePath = self.attachNewNode(CollisionNode(str(self.id)))
 		cnodePath.node().addSolid(cs)
-		base.cTrav.addCollider(cnodePath, collHandEvent)
-		cnodePath.show()
+		base.cTrav.addCollider(cnodePath, base.collHandEvent)
+		#cnodePath.show()
 		
 		base.accept(str(self.id) + '-into-playerActor', self.catch)
 		
@@ -58,7 +57,7 @@ class Rock(CollisionSphere):
 	"""
 	An invisible Rock where you can't walk into
 	"""
-	def __init__(self,bindTo,pusher,cx,cy,cz,radius):
+	def __init__(self,bindTo,cx,cy,cz,radius):
 		super(Rock,self).__init__(cx,cy,cz,radius)
 		
 		#create collision solid

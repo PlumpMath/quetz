@@ -18,52 +18,55 @@ from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import *
 from direct.gui.DirectGuiBase import DirectGuiWidget
 
-import modules.joypad
-
-from pandac.PandaModules import WindowProperties
-
-class MainMenu(DirectGuiWidget):
-	def __init__(self, game):
+class MainMenuWidget(DirectGuiWidget):
+	def __init__(self):
 		DirectGuiWidget.__init__(self)
 		
-		def newGame():
-			if serverEdit.get() == "":
-				game.startGame(None, nicknameEdit.get())
-			else:
-				game.startGame(serverEdit.get(), nicknameEdit.get())
-		
-		def setServer(textEntered):
-			print textEntered
-		
-		def setNickname(textEntered):
-			print setNickname
-		
-		def setJoypad(status):
-			if status:
-				game.joypad = modules.joypad.Joypad()
-		
-		def setFullscreen(status):
-			if status:
-				wp = WindowProperties()
-				wp.setSize(base.pipe.getDisplayWidth(), base.pipe.getDisplayHeight())
-				wp.setFullscreen(True)
-				base.win.requestProperties(wp)
-			else:
-				wp = WindowProperties()
-				wp.setFullscreen(False)
-				base.win.requestProperties(wp)
+		self.frame = DirectFrame(frameSize=(-1.5, 1.5, -1, 1), frameColor=(0.2, 0.2, 0.2, 0.7), pos=(0,0,0), parent=self)
 		
 		# Add widgets
 		b = DirectLabel(text = "Enter server IP (v4): ", scale = .05, pos = (-0.2 , 0, 0.5 ),                          parent=self)
-		serverEdit = DirectEntry(text = "" ,             scale = .05, pos = ( 0.05, 0, 0.5 ), command=setServer,       parent=self)
+		self.serverEdit = DirectEntry(text = "" ,             scale = .05, pos = ( 0.05, 0, 0.5 ), command=self.setServer,       parent=self)
 		
 		b = DirectLabel(text = "Nickname: ",             scale = .05, pos = (-0.2 , 0, 0.4 ),                          parent=self)
-		nicknameEdit = DirectEntry(text = "" ,           scale = .05, pos = ( 0.05, 0, 0.4 ), command=setNickname,     parent=self)
+		self.nicknameEdit = DirectEntry(text = "" ,           scale = .05, pos = ( 0.05, 0, 0.4 ), command=self.setNickname,     parent=self)
 		
-		b = DirectCheckButton(text = "Joypad support",   scale = .05, pos = ( 0   , 0, 0.3 ), command = setJoypad,     parent=self)
-		b = DirectCheckButton(text = "Fullscreen",       scale = .05, pos = ( 0   , 0, 0.2 ), command = setFullscreen, parent=self)
-		b = DirectButton(text = "New game",              scale = .05, pos = ( 0   , 0, 0.1 ), command=newGame,         parent=self)
+		b = DirectCheckButton(text = "Joypad support",   scale = .05, pos = ( 0   , 0, 0.3 ), command = self.setJoypad,     parent=self)
+		b = DirectCheckButton(text = "Fullscreen",       scale = .05, pos = ( 0   , 0, 0.2 ), command = self.setFullscreen, parent=self)
+		b = DirectButton(text = "New game",              scale = .05, pos = ( 0   , 0, 0.1 ), command=self.newGame,         parent=self)
 		
 		
 		b = OnscreenText(text = "Quetz Menu",            scale = .07, pos = ( 0.95,-0.95), fg=(1,0.5,0.5,1),           parent=self)
 		
+		b = DirectButton(text = "Disconnect",            scale = .05, pos = ( 0   , 0, 0   ), command = self.disconnect, parent=self)
+		
+	def newGame(self):
+		if self.serverEdit.get() == "":
+			base.startGame(None, self.nicknameEdit.get())
+		else:
+			base.startGame(self.serverEdit.get(), self.nicknameEdit.get())
+		self.destroy()
+	
+	def disconnect(self):
+		base.stopGame()
+	
+	def setServer(self, textEntered):
+		print textEntered
+	
+	def setNickname(self, textEntered):
+		print setNickname
+	
+	def setJoypad(self, status):
+		if status:
+			base.joypad = modules.joypad.Joypad()
+	
+	def setFullscreen(self, status):
+		if status:
+			wp = WindowProperties()
+			wp.setSize(base.pipe.getDisplayWidth(), base.pipe.getDisplayHeight())
+			wp.setFullscreen(True)
+			base.win.requestProperties(wp)
+		else:
+			wp = WindowProperties()
+			wp.setFullscreen(False)
+			base.win.requestProperties(wp)

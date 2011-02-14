@@ -35,14 +35,17 @@ from math import pi, sin, cos
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from direct.actor.Actor import Actor
-from pandac.PandaModules import AntialiasAttrib, NodePath, SmoothMover, WindowProperties, ClockObject
+from pandac.PandaModules import AntialiasAttrib, NodePath, SmoothMover, WindowProperties, ClockObject, TextProperties, TextPropertiesManager
 from panda3d.core import Point3, Vec3, CollisionSphere, CollisionNode, CollisionHandlerEvent, CollisionTraverser, CollisionHandlerPusher
 
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectGui import *
 from direct.gui.DirectGuiBase import DirectGuiWidget
+from direct.showbase.DirectObject import DirectObject
  
 from pandac.PandaModules import TextNode
+
+import modules.joypad
 
 # Distance between tail objects
 TAILOBJ_DIST    = 5
@@ -61,19 +64,42 @@ class OST(object):
 		self.chatText.setCardAsMargin(0.4, 0.4, 0.2, 0.2)
 		self.chatText.setCardDecal(True)
 		
+		tpRed = TextProperties()
+		tpRed.setTextColor(0.7, 0, 0, 1)
+		tpWhite = TextProperties()
+		tpWhite.setTextColor(1, 1, 1, 1)
+		tpBlue = TextProperties()
+		tpBlue.setTextColor(0, 0, 0.7, 1)
+		
+		tpMgr = TextPropertiesManager.getGlobalPtr()
+		tpMgr.setProperties("red", tpRed)
+		tpMgr.setProperties("white", tpWhite)
+		tpMgr.setProperties("blue", tpBlue)
+		
 		textNodePath = aspect2d.attachNewNode(self.chatText)
 		textNodePath.setPos(-1.25, 0, -0.45)
 		textNodePath.setScale(0.05)
 		
 		# Enterchat
-		self.enterChat = DirectEntry(text = "", scale=.05, command=self.sendChat, focus=0, pos=(-1.25, 0, -0.95))
+		self.enterChat = DirectEntry(text = "", scale=.04, command=self.sendChat, focus=0, pos=(-1.25, 0, -0.95), width=63, text_fg=(1,1,1,1), frameColor=(0.2, 0.2, 0.2, 0.0), relief=3, borderWidth=(0.1, 0.1), parent=aspect2d, sortOrder=1)
 		
 		# Task for mouse
-		#base.taskMgr.add(self.mouseWatcher, "mouseWatcher", sort=5)
+		base.taskMgr.add(self.mouseWatcher, "mouseWatcher", sort=5)
+		
+		# Key events
+		base.accept("enter", self.toggleFocusChat)
+	
+	def toggleFocusChat(self):
+		self.enterChat['focus'] = not self.enterChat['focus']
+		if self.enterChat['focus']:
+			self.enterChat['frameColor'] = (0.2, 0.2, 0.2, 0.8)
+		else:
+			self.enterChat['frameColor'] = (0.2, 0.2, 0.2, 0.0)
 	
 	def sendChat(self, textEntered):
-		self.enterChat.enterText("")
-		base.serverConnection.sendChat(textEntered)
+		if textEntered <> "":
+			self.enterChat.enterText("")
+			base.serverConnection.sendChat(textEntered)
 	
 	def mouseWatcher(self, task):
 		if base.mouseWatcherNode.hasMouse():
@@ -83,15 +109,15 @@ class OST(object):
 				self.chatText.setCardColor(0.2, 0.2, 0.2, 0.2)
 		return Task.cont
 	
-	def addChat(self, msg, name=None):
+	def addChat(self, msg, color="white", name=None):
 		# Add this message to the chats
 		if name == None:
-			self.chats.append("\n" + msg)
+			self.chats.append("\n\1" + color + "\1" + msg + "\2")
 		else:
-			self.chats.append("\n" + name + ": " + msg)
+			self.chats.append("\n" + name + ": \1white\1" + msg + "\2")
 		
 		# Delete old chats
-		if len(self.chats) > 10:
+		if len(self.chats) > 8:
 			del self.chats[0]
 		
 		# Place the chats into the text
@@ -108,7 +134,7 @@ class OST(object):
 			self.message.destroy()
 		except AttributeError:
 			pass
-		self.message = OnscreenText(text = msg, scale = .15, pos = ( 0,0), fg=(1,0,0,1), shadow=(0,0,0,0.5))
+		self.message = OnscreenText(text = msg, scale = .15, pos = ( 0,0), fg=(1,0,0,1), shadow=(0,0,0,0.5), parent=aspect2d)
 		self.timer = threading.Timer(secs, self.removeMessage)
 		self.timer.start()
 	
@@ -205,7 +231,7 @@ class PlayerActor(Actor):
 		cs = CollisionSphere(0, 0, 200, 400)
 		cnodePath = self.attachNewNode(CollisionNode('playerActor'))
 		cnodePath.node().addSolid(cs)
-		cnodePath.show()
+		#cnodePath.show()
 		
 		# Add to the pusher
 		base.pusher.addCollider(cnodePath, self)
@@ -264,13 +290,22 @@ class PlayerActor(Actor):
 		joypadcontrol = JoypadControl(self)
 		joypadcontrol.start()
 	
-	def loseLife(self):
+	def remove(self):
+		base.taskMgr.remove("walkPlayerTast")
+		base.taskMgr.remove("moveNickLabel")
+		self.tail.remove()
+		self.removeNode()
+	
+	def loseLife(self, byPlayer = None):
 		if not self.invincible:
 			if self.lives == 0:
 				self.die()
 			else:
 				self.lives -= 1
-				base.ost.showMessage("Lives left: " + str(self.lives) + "!", 5)
+				if byPlayer <> None:
+					base.ost.addChat("Quetzt by " + byPlayer + "! Lives left: " + str(self.lives) + "!", "red")
+				else:
+					base.ost.addChat("Quetzt! Lives left: " + str(self.lives) + "!", "red")
 				thread.start_new_thread(self.makeInvincible, (3,))
 	
 	def die(self):
@@ -286,8 +321,8 @@ class PlayerActor(Actor):
 			x = 1
 		elif x < -1:
 			x = -1
-		if y > 1:
-			y = 1
+		if y > 0.3:
+			y = 0.3
 		elif y < -1:
 			y = -1
 		self.setPos(self, 0, y * 300, 0)
@@ -480,14 +515,14 @@ class TailObject(NodePath):
 	def playerActorDies(self, event):
 		#print self.tail.followObj
 		if self.tail.followObj <> base.playerActor:
-			base.playerActor.loseLife()
+			base.playerActor.loseLife(self.tail.followObj.nickname)
 	
 	def _addCollider(self):
 		cs = CollisionSphere(0,0,0,2)
 		cs.setTangible(False)
 		cnodePath = self.attachNewNode(CollisionNode(str(self.id)))
 		cnodePath.node().addSolid(cs)
-		cnodePath.show()
+		#cnodePath.show()
 		
 		base.cTrav.addCollider(cnodePath, base.collHandEvent)
 	
@@ -497,7 +532,7 @@ class TailObject(NodePath):
 		"""
 		try:
 			index = -((self.position+1)*TAILOBJ_DIST)
-			self.setPos(self.tail.path[index])
+			self.setPos(*self.tail.path[index] + (0,0,1))
 		except IndexError:
 			self.setPos(self.tail.path[0])
 	
@@ -513,7 +548,9 @@ class OtherPlayer(NodePath):
 		node = np.node()
 		NodePath.__init__(self, node)
 		
+		# Tuple (ip, port)
 		self.addr = addr
+		
 		self.nickname = nickname
 		self.id = uuid.uuid1()
 		
@@ -530,6 +567,16 @@ class OtherPlayer(NodePath):
 		text.setTextColor(1, 0, 0, 1)
 		self.nicknameLabel = NodePath(text)
 		self.nicknameLabel.reparentTo(base.render)
+		
+		# Create collision solid for other player
+		cs = CollisionSphere(0, 0, 200, 400)
+		cnodePath = self.attachNewNode(CollisionNode('otherPlayer'))
+		cnodePath.node().addSolid(cs)
+		#cnodePath.show()
+		
+		# Add to the pusher
+		base.pusher.addCollider(cnodePath, self)
+		base.cTrav.addCollider(cnodePath, base.pusher)
 		
 		# Tail
 		self.tail = Tail(self)
@@ -550,6 +597,7 @@ class OtherPlayer(NodePath):
 	def remove(self):
 		base.taskMgr.remove(str(self.id) + "-moveNickLabel")
 		self.tail.remove()
+		self.nicknameLabel.removeNode()
 		self.removeNode()
 # END PLAYER OBJECTS
 
@@ -610,13 +658,20 @@ class ServerConnection():
 				# Got a new player!
 				dataD = json.loads(zlib.decompress(data[7:]))
 				self.addPlayer(dataD[0], dataD[1])
+			#elif data[0:6] == "PLAYEL":
+			#	# Player left
+			#	dataD = json.loads(zlib.decompress(data[7:]))
+			#	self.removePlayer(self.getPlayerByAddr(dataD))
 			elif data == "KICKED":
 				# Hey! I'm kicked!?
 				print "You were kicked from the server."
 			elif data[0:3] == "MSG":
 				# Gets (msg, nick)
 				msgandnick = json.loads(zlib.decompress(data[4:]))
-				base.ost.addChat(msgandnick[0], msgandnick[1])
+				if len(msgandnick) == 2:
+					base.ost.addChat(msgandnick[0], msgandnick[1])
+				else:
+					base.ost.addChat(msgandnick[0])
 			
 		except socket.error:
 			print "Connection lost."
@@ -647,6 +702,11 @@ class ServerConnection():
 		for player in players:
 			self.updatePlayer(player[0], player[1], player[2], player[3], player[4], player[5])
 	
+	#def getPlayerByAddr(self, addr):
+	#	for player in self.otherplayers:
+	#		if player.addr == addr:
+	#			return player
+	
 	def removePlayer(self, player):
 		"""
 		Remove a player from the world
@@ -675,6 +735,7 @@ class ServerConnection():
 		newPlayer.reparentTo(base.render)
 		newPlayer.setScale(0.005, 0.005, 0.005)
 		self.otherplayers.append(newPlayer)
+		base.ost.addChat("Player " + nickname + " connected", "blue")
 	
 	def movePlayers(self, task):
 		"""
@@ -684,7 +745,8 @@ class ServerConnection():
 			player.smoothMover.computeAndApplySmoothPosHpr(player, player)
 		return Task.cont
 	
-	def __del__(self):
+	def close(self):
+		self.socket.sendto("DISC", (self.server, self.port))
 		self.socket.close()
 # END NETWORKING
 
@@ -695,14 +757,14 @@ class Quetz(ShowBase):
 	"""
 	def __init__(self):
 		ShowBase.__init__(self)
-		self.menu = menu.MainMenu(self)
-		self.run()
-	
-	def startGame(self, server = None, nickname = None):
-		self.menu.destroy()
 		
-		self.cameraDistance = 5000
+		menu.MainMenuWidget()
+	
+	def startGame(self, server = None, nickname = None):		
+		self.cameraDistance = 8000
 		self.cameraAngle = 0
+		self.cameraBirdview = 1700
+		self.secondCamera = None
 		
 		# Set options
 		self.render.setAntialias(AntialiasAttrib.MAuto)
@@ -719,7 +781,7 @@ class Quetz(ShowBase):
 		map = worlds.NormalMap.World()
 		
 		# Load the world
-		self.render.setFog(map.fog)
+		base.render.setFog(map.fog)
 		self.setBackgroundColor(map.bgcolor)
 		
 		# Set colission traverser
@@ -732,14 +794,14 @@ class Quetz(ShowBase):
 		self.pusher = CollisionHandlerPusher()
 		
 		# Load environment
-		self.environ = self.loader.loadModel(map.map)
+		self.environ = base.loader.loadModel(map.map)
 		self.environ.reparentTo(self.render)
 		self.environ.setScale(*map.scale)
 		
 		# Load catchables
 		self.catchables = []
 		for catchable in map.catchables:
-			catchableObj = worldObjects.Catchable(self.loader, self.render, self.collHandEvent, *catchable)
+			catchableObj = worldObjects.Catchable(*catchable)
 			self.catchables.append(catchableObj)
 		
 		# Load panda
@@ -747,25 +809,45 @@ class Quetz(ShowBase):
 		
 		# Load rocks
 		for rock in map.rocks:
-			rockObj = worldObjects.Rock(self.environ, self.pusher, *rock)
+			rockObj = worldObjects.Rock(self.environ, *rock)
 		
 		# Add tasks
-		self.taskMgr.add(self.spinCameraTask, "SpinCameraTask")
+		base.taskMgr.add(self.spinCameraTask, "SpinCameraTask")
 		
 		# Sending to server task
 		if server <> None:
 			self.serverConnection = ServerConnection(server)
 		
 		# Other events
-		self.accept("window-event",self.windowEvent)
-		self.accept("wheel_down",self.increaseCamDist)
-		self.accept("wheel_up",self.decreaseCamDist)
-		self.accept("escape",self.quitGame)
+		base.accept("window-event",self.windowEvent)
+		base.accept("wheel_down",self.increaseCamDist)
+		base.accept("wheel_up",self.decreaseCamDist)
+		base.accept("escape",self.showMenu)
 		
-		self.accept("mouse1",self.turnCamera)
-		self.accept("mouse1-up",self.stopTurnCamera)
+		base.accept("mouse1",self.turnCamera)
+		base.accept("mouse1-up",self.stopTurnCamera)
 		
-		self.accept("mouse3",self.lookBehind)
+		base.accept("mouse3",self.turnVCamera)
+		base.accept("mouse3-up",self.stopTurnVCamera)
+		
+		base.accept("e",self.toggleSecondCamera)
+	
+	def stopGame(self):
+		base.taskMgr.remove("SpinCameraTask")
+		base.taskMgr.remove("resetCamera")
+		base.taskMgr.remove("turnVCameraTask")
+		base.taskMgr.remove("turnCameraTask")
+		base.taskMgr.remove("mouseWatcher")
+		base.taskMgr.remove("walkPlayerTast")
+		base.taskMgr.remove("moveNickLabel")
+		base.taskMgr.remove("movePlayerForwardTask")
+		base.taskMgr.remove("movePlayerBackwardTask")
+		base.taskMgr.remove("rotatePlayerLeftTask")
+		base.taskMgr.remove("rotatePlayerRightTask")
+		base.taskMgr.remove("joypadControl")
+		base.render.node().removeAllChildren()
+		base.ignoreAll()
+		self.serverConnection.close()
 	
 	def turnCamera(self):
 		base.taskMgr.add(self.turnCameraTask, "turnCameraTask")
@@ -774,8 +856,19 @@ class Quetz(ShowBase):
 		base.taskMgr.remove("turnCameraTask")
 		base.taskMgr.add(self.resetCamera, "resetCamera")
 	
-	def lookBehind(self):
-		self.cameraDistance = -self.cameraDistance
+	def turnVCamera(self):
+		base.taskMgr.add(self.turnVCameraTask, "turnVCameraTask")
+	
+	def stopTurnVCamera(self):
+		base.taskMgr.remove("turnVCameraTask")
+	
+	def toggleSecondCamera(self):
+		# Make a second camera
+		if self.secondCamera == None:
+			self.secondCamera = base.makeCamera(base.win, displayRegion=(0.65,1,0,0.35), sort=10)
+		else:
+			self.secondCamera.removeNode()
+			self.secondCamera = None
 	
 	def resetCamera(self, task):
 		if self.cameraAngle < -500 or self.cameraAngle > 500:
@@ -798,35 +891,53 @@ class Quetz(ShowBase):
 			# This is the first time and prevX isnt defined yet
 			pass
 		self.prevX = base.mouseWatcherNode.getMouseX()
-		#self.prevY = base.mouseWatcherNode.getMouseY()
+		return Task.cont
+	
+	def turnVCameraTask(self, task):
+		try:
+			if base.mouseWatcherNode.getMouseY() > self.prevY:
+				self.cameraBirdview += 100
+			elif base.mouseWatcherNode.getMouseY() < self.prevY:
+				self.cameraBirdview -= 100
+		except AttributeError:
+			# This is the first time and prevY isnt defined yet
+			pass
+		self.prevY = base.mouseWatcherNode.getMouseY()
 		return Task.cont
 	
 	def spinCameraTask(self, task):
 		"""
 		Controls the moving of the camera
 		"""
-		self.camera.setPos(self.playerActor, self.cameraAngle, self.cameraDistance, 1000)
-		self.camera.lookAt(self.playerActor)
+		base.camera.setPos(self.playerActor, self.cameraAngle, self.cameraDistance, self.cameraBirdview)
+		base.camera.lookAt(self.playerActor)
+		# And now the second camera
+		if self.secondCamera <> None:
+			self.secondCamera.setPos(self.playerActor, 0, -5000, 1000)
+			self.secondCamera.lookAt(self.playerActor)
 		return Task.cont
 	
 	def increaseCamDist(self):
-		self.cameraDistance += 100
+		self.cameraDistance += 300
 	
 	def decreaseCamDist(self):
-		self.cameraDistance -= 100
+		self.cameraDistance -= 300
 	
 	def windowEvent(self, event):
 		"""
 		This happens when something happens to the window
 		"""
 		if self.win.isClosed():
-			self.quitGame()
+			self.stopGame()
+			quit()
 		else:
 			# Window resize -> set aspect ratio
 			base.camLens.setAspectRatio(float(self.win.getXSize()) / float(self.win.getYSize()))
 	
-	def quitGame(self):
-		quit()
+	def showMenu(self):
+		menu.MainMenuWidget()
+		
 # END MAIN APPLICATION
-	
-app = Quetz()
+
+Quetz()
+run()
