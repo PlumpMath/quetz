@@ -15,15 +15,19 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import socket
-import threading
+#import threading
 import thread
 import json
 import zlib
 import time
-import SocketServer
+import uuid
+import random
+import math
 
 PORT = 44454
-TIMEOUT_TIME = 1
+TIMEOUT_TIME = 5
+
+AI_NAMES = ["Zubie", "Krab"]
 
 class PlayerInWorld(object):
 	def __init__(self, addr, nickname):
@@ -36,6 +40,100 @@ class PlayerInWorld(object):
 		self.addr = addr
 		self.nickname = nickname
 
+class AIPlayer(PlayerInWorld):
+	def __init__(self, world):
+		super(AIPlayer, self).__init__(str(uuid.uuid1()), "[AI] " + random.choice(AI_NAMES))
+		
+		self.world = world
+		self.world.players.append(self)
+		
+		self.movingToX = 0
+		self.movingToY = 0
+		
+		self.prevX = 0
+		self.prevY = 0
+		
+		# Sets the next target
+		thread.start_new_thread(self.setTargetThread, ())
+		# Moves to the target
+		thread.start_new_thread(self.moveToTargetThread, ())
+	
+	def getClosestPlayer(self):
+		closestDist = None
+		for player in self.world.players:
+			if player.addr <> self.addr:
+				distance = abs(self.x - player.x) ** 2 + abs(self.y - player.x) ** 2
+				if distance < closestDist or closestDist == None:
+					closest = player
+					closestDist = distance
+		
+		return closest
+	
+	def getHeading(self, x, y):
+		dx = self.x - x
+		dy = self.y - y
+		
+		if dx >= 0 and dy >= 0:
+			# upper right
+			return math.degrees ( math.atan2( abs(dy) , abs(dx) ) ) + 90
+		elif dx >= 0 and dy <= 0:
+			# lower right
+			return math.degrees ( math.atan2( abs(dy) , abs(dx) ) )
+		elif dx <= 0 and dy <= 0:
+			# lower left
+			return math.degrees ( math.atan2( abs(dy) , abs(dx) ) ) - 90
+		elif dx <= 0 and dy >= 0:
+			# upper left
+			return math.degrees ( math.atan2( abs(dy) , abs(dx) ) ) - 180
+	
+	def setTargetThread(self):
+		while True:
+			time.sleep(0.1)
+			try:
+				self.closestPlayer = self.getClosestPlayer()
+				self.movingToX = self.closestPlayer.x + math.sin(math.radians(self.closestPlayer.h)) * 50
+				self.movingToY = self.closestPlayer.y - math.cos(math.radians(self.closestPlayer.h)) * 50
+				
+			except UnboundLocalError:
+				# No players
+				pass
+		
+	def moveToTargetThread(self):
+		while True:
+			time.sleep(0.1)
+			# Turn towards the nearest player
+			if self.prevX <> self.x and self.prevY <> self.y:
+				newHeading = self.getHeading(self.prevX, self.prevY)
+				if abs(self.h - newHeading) > 10:
+					if self.h > newHeading:
+						self.h -= 10
+					else:
+						self.h += 10
+				else:
+					self.h = self.getHeading(self.prevX, self.prevY)
+			
+			# Set prevx and prevy
+			self.prevX = self.x
+			self.prevY = self.y
+				
+			# Move towards it
+			if abs(self.x - self.movingToX) > 6:
+				if self.x > self.movingToX:
+					self.x -= 6
+				else:
+					self.x += 6
+			else:
+				self.x = self.movingToX
+			
+			if abs(self.y - self.movingToY) > 6:
+				if self.y > self.movingToY:
+					self.y -= 6
+				else:
+					self.y += 6
+			else:
+				self.y = self.movingToY
+
+		
 class World(object):
 	"""
 	Models the World as it currently looks like on the server
@@ -168,6 +266,9 @@ class QuetzServer():
 		self.socket.bind(("", port))
 		
 		self.udphandler = UDPHandler(world, self.socket)
+		
+		# AI
+		AIPlayer(world)
 		
 		# The daemon
 		while True:
